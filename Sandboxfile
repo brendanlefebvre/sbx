@@ -1,0 +1,96 @@
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      ca-certificates curl git tmux ripgrep openssh-client gnupg procps \
+      libicu72 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Node LTS via NodeSource (supports linux/arm64)
+RUN curl -fsSL https://deb.nodesource.com/setup_lts.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN npm install -g @anthropic-ai/claude-code
+
+# PowerShell + Pester, so agents can run this repo's own unit suite inside the
+# sandbox (self-hosted sbx development). Microsoft's apt repo is x64-only, so
+# install from the GitHub release tarball, arch-mapped (arm64 on both current
+# hosts). Version pinned; bump deliberately.
+ARG PWSH_VERSION=7.6.4
+RUN arch=$(dpkg --print-architecture) \
+    && case "$arch" in \
+         arm64) pwsh_arch=arm64 ;; \
+         amd64) pwsh_arch=x64 ;; \
+         *) echo "unsupported arch: $arch" && exit 1 ;; \
+       esac \
+    && curl -fsSL -o /tmp/pwsh.tar.gz \
+       "https://github.com/PowerShell/PowerShell/releases/download/v${PWSH_VERSION}/powershell-${PWSH_VERSION}-linux-${pwsh_arch}.tar.gz" \
+    && mkdir -p /opt/microsoft/powershell/7 \
+    && tar -xzf /tmp/pwsh.tar.gz -C /opt/microsoft/powershell/7 \
+    && chmod +x /opt/microsoft/powershell/7/pwsh \
+    && ln -s /opt/microsoft/powershell/7/pwsh /usr/bin/pwsh \
+    && rm /tmp/pwsh.tar.gz \
+    && pwsh -NoProfile -Command "Install-Module Pester -Force -Scope AllUsers" \
+    && pwsh -NoProfile -Command "(Get-Module -ListAvailable Pester).Version"
+
+# Git config for the mounted Windows repo:
+#  - safe.directory '*': wslc Windows bind-mounts present as root:root, but the
+#    container runs as non-root agent, so git would refuse the repo with
+#    "detected dubious ownership". Trusting all dirs is safe in a throwaway
+#    sandbox whose only writable surface is the one mounted repo.
+#  - core.autocrlf input: a Windows working tree carries CRLF while the repo
+#    stores LF, so a Linux git would show every file as modified. `input`
+#    normalizes CRLF->LF when comparing, so a mounted Windows repo reads clean.
+#    Repos with their own .gitattributes still override this.
+RUN git config --system --add safe.directory '*' \
+    && git config --system core.autocrlf input
+
+# Non-root agent; /work is the mount point, owned by agent. .claude is the shared
+# auth volume; .claude/projects is a per-repo volume mounted over it — pre-create
+# it (agent-owned) so that nested volume mount inherits agent ownership rather
+# than defaulting to root.
+RUN useradd --create-home --uid 1000 --shell /bin/bash agent \
+    && mkdir -p /work /home/agent/.claude/projects \
+    && chown -R agent:agent /work /home/agent
+
+# --ssh support. Under `--ssh`, keys are bind-mounted read-only at
+# /home/agent/.ssh-ro as root:root mode 0777 (wslc bind ownership), which ssh
+# refuses to use as a private key. The entrypoint copies them into ~/.ssh at
+# 0600 at startup (ephemeral, per-container). accept-new admits first-seen host
+# keys while still honoring existing known_hosts entries and rejecting a CHANGED
+# key for a known host.
+RUN printf '\nHost *\n    StrictHostKeyChecking accept-new\n' >> /etc/ssh/ssh_config \
+ && printf '%s\n' \
+      '#!/bin/bash' \
+      'if [ -d /home/agent/.ssh-ro ]; then' \
+      '  mkdir -p "$HOME/.ssh" && chmod 700 "$HOME/.ssh"' \
+      '  cp -r /home/agent/.ssh-ro/. "$HOME/.ssh/" 2>/dev/null || true' \
+      '  chmod 600 "$HOME"/.ssh/id_* 2>/dev/null || true' \
+      '  [ -f "$HOME/.ssh/known_hosts" ] || touch "$HOME/.ssh/known_hosts"' \
+      '  chmod 600 "$HOME/.ssh/known_hosts" 2>/dev/null || true' \
+      'fi' \
+      'exec "$@"' \
+      > /usr/local/bin/sbx-entrypoint \
+ && chmod +x /usr/local/bin/sbx-entrypoint
+
+# Claude's global config file is normally ~/.claude.json — a sibling of the
+# ~/.claude dir, so it would live OUTSIDE the persisted auth volume and be lost
+# every run (Claude warns "configuration file not found"). Pointing
+# CLAUDE_CONFIG_DIR at the volume relocates .claude.json to
+# /home/agent/.claude/.claude.json, inside the volume, so config persists.
+ENV CLAUDE_CONFIG_DIR=/home/agent/.claude
+
+# UTF-8 locale: debian-slim leaves LANG unset (POSIX), and tmux in a non-UTF-8
+# locale renders every non-ASCII glyph as "_" — claude's logo, spinners, and
+# status glyphs all degrade (found live in v2 verification; C.utf8 ships with
+# glibc, no locales package needed). LC_ALL pins it against overrides.
+# DISABLE_AUTOUPDATER: the npm prefix is root-owned so in-container self-update
+# can only fail noisily; updates arrive via image rebuild (cattle, not pets).
+ENV LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8 \
+    DISABLE_AUTOUPDATER=1
+
+USER agent
+WORKDIR /work
+ENTRYPOINT ["/usr/local/bin/sbx-entrypoint"]
+CMD ["bash"]
