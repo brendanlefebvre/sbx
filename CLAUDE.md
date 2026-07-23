@@ -14,7 +14,8 @@ for the implementation plan.
   scopes — notably the volume-ownership result that lets us ship an unmodified image.
 - The container runtime is `wslc` on Windows / `docker` on macOS, overridable via
   `SBX_RUNTIME` (e.g. podman/colima/orbstack). On macOS the override is always honored;
-  on Windows only `--here` honors it — the default window/tab mode hardcodes `wslc`.
+  on Windows only the default foreground mode honors it — the `--new-window`/`--tab`
+  spawn modes hardcode `wslc`.
 - Launcher lives in `sbx.ps1`; `$PROFILE` dot-sources it (see README / Task 10).
 
 ## Test
@@ -28,9 +29,11 @@ for the implementation plan.
 - `wslc` is public preview, currently **2.9.4.0** (auto-updated from 2.9.3.0 mid-project);
   treat CLI surprises as preview quirks and record them in `docs/FINDINGS.md`, which
   covers findings from both versions and flags which is which.
-- macOS is foreground-only (no new-window/tab spawn): `--tab` is rejected and `--here` is
-  the default and only mode. (`--window` is not a flag on any platform — `window` is just
-  the internal default; passing it errors as an unknown option everywhere.)
+- Foreground (`here`) is the default on every platform, so an SSH session never needs a
+  flag regardless of host OS. `--new-window` (aliases `--window`/`--win`) opts into a WT
+  window and `--tab` into a WT tab — both Windows-only; on non-Windows they raise an
+  'unsupported' error (for `--new-window`, deliberately "for now"). macOS is
+  foreground-only: every spawn flag is rejected there.
 - **Unified workspace (v2):** one long-lived container `sbx-main` holds every added
   project, not one container per repo. `sbx add <path>` moves the repo into the workspace
   dir (default `~/sbx-ws`, override `SBX_WORKSPACE`) and leaves a junction (Windows) /

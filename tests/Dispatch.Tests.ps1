@@ -7,21 +7,21 @@ Describe 'Invoke-Sbx dispatch (v2)' -Skip:(-not $IsWindows) {
         Mock -CommandName Get-SbxWorkspacePath -MockWith { Join-Path $TestDrive 'ws' }
         New-Item -ItemType Directory -Force (Join-Path $TestDrive 'ws\foo') | Out-Null
     }
-    It 'sbx foo --here ensures sbx-main then execs the tmux attach in-process' {
+    It 'sbx foo (default) ensures sbx-main then execs the tmux attach in-process' {
         Mock -CommandName wslc -MockWith { $script:seen = $args }
-        Invoke-Sbx @('foo', '--here')
+        Invoke-Sbx @('foo')
         Should -Invoke Start-SbxMain -Times 1
         ($script:seen -join ' ') | Should -Be 'exec -it sbx-main tmux new-session -A -s foo -c /work/foo claude --dangerously-skip-permissions'
     }
-    It 'sbx (no args) --here attaches the hub at /work' {
+    It 'sbx (no args, default) attaches the hub at /work' {
         Mock -CommandName wslc -MockWith { $script:seen = $args }
-        Invoke-Sbx @('--here')
+        Invoke-Sbx @()
         ($script:seen -join ' ') | Should -BeLike '*-s hub -c /work claude*'
     }
-    It 'sbx foo (default) spawns a NEW WT window with the encoded attach, no cleanup' {
+    It 'sbx foo --new-window spawns a NEW WT window with the encoded attach, no cleanup' {
         Mock -CommandName Start-Process -MockWith { $script:file = "$FilePath"; $script:wt = $ArgumentList }
         Mock -CommandName wslc -MockWith { throw 'should not run in-process' }
-        Invoke-Sbx @('foo')
+        Invoke-Sbx @('foo', '--new-window')
         $script:file | Should -Be 'wt.exe'
         $script:wt   | Should -Contain '-1'
         $ix = [array]::IndexOf($script:wt, '-EncodedCommand')
@@ -31,12 +31,12 @@ Describe 'Invoke-Sbx dispatch (v2)' -Skip:(-not $IsWindows) {
         $decoded | Should -Not -BeLike '*finally*'      # never reap the persistent container
     }
     It 'sbx ghost throws when the project is not in the workspace' {
-        { Invoke-Sbx @('ghost', '--here') } | Should -Throw '*no project*'
+        { Invoke-Sbx @('ghost') } | Should -Throw '*no project*'
     }
-    It 'scratch --here runs --rm with cleanup and no /work' {
+    It 'scratch (default) runs --rm with cleanup and no /work' {
         $script:calls = @()
         Mock -CommandName wslc -MockWith { $script:calls += ,($args -join ' ') }
-        Invoke-Sbx @('scratch', '--here')
+        Invoke-Sbx @('scratch')
         ($script:calls -join '|') | Should -BeLike '*run --rm*'
         ($script:calls -join '|') | Should -Not -BeLike '*:/work *'
         ($script:calls -join '|') | Should -BeLike '*stop sbx-scratch-*'
@@ -66,11 +66,14 @@ Describe 'Get-SbxRemoveVerb' {
 }
 
 Describe 'Resolve-SbxWindow' {
-    It 'forces here on macOS and rejects --tab' {
-        Resolve-SbxWindow -IsMac:$true -Requested 'window' | Should -Be 'here'
-        { Resolve-SbxWindow -IsMac:$true -Requested 'tab' } | Should -Throw '*tab*'
-    }
     It 'passes the request through on Windows' {
-        Resolve-SbxWindow -IsMac:$false -Requested 'tab' | Should -Be 'tab'
+        Resolve-SbxWindow -OnWindows:$true -Requested 'here'   | Should -Be 'here'
+        Resolve-SbxWindow -OnWindows:$true -Requested 'window' | Should -Be 'window'
+        Resolve-SbxWindow -OnWindows:$true -Requested 'tab'    | Should -Be 'tab'
+    }
+    It 'defaults to foreground (here) off Windows and rejects --new-window/--tab' {
+        Resolve-SbxWindow -OnWindows:$false -Requested 'here'    | Should -Be 'here'
+        { Resolve-SbxWindow -OnWindows:$false -Requested 'window' } | Should -Throw '*new-window*'
+        { Resolve-SbxWindow -OnWindows:$false -Requested 'tab' }    | Should -Throw '*tab*'
     }
 }

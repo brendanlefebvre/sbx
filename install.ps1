@@ -13,7 +13,7 @@ if ($IsMacOS) {
     if (($env:PATH -split ':') -notcontains $bin) {
         Write-Host "NOTE: $bin is not on your PATH. Add:  export PATH=`"$bin`:`$PATH`""
     }
-    Write-Host "Open a new shell, then try:  sbx <path>   (or: sbx --here <path>)"
+    Write-Host "Open a new shell, then try:  sbx <name>   (runs in the current terminal)"
     return
 }
 # --- Windows wiring below (unchanged) ---
@@ -45,4 +45,4 @@ if (($userPath -split ';' | Where-Object { $_ }) -notcontains $repo) {
     Write-Host "$repo already on your user PATH"
 }
 
-Write-Host "Open a new pwsh session, then try:  sbx --here <path>"
+Write-Host "Open a new pwsh session, then try:  sbx <name>   (add --new-window for a separate WT window)"

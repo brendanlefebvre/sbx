@@ -2,14 +2,19 @@ function ConvertFrom-SbxArgs {
     [CmdletBinding()]
     param([string[]]$Arguments = @())
 
-    $opts = [ordered]@{ Command = 'attach'; Target = $null; Operation = $null; Window = 'window' }
+    # Default is foreground ('here'): a bare `sbx` runs in the current terminal so
+    # SSH users never have to remember a flag. `--new-window` (aka `--window`/`--win`)
+    # opts into spawning a GUI window — Windows-only (see Resolve-SbxWindow).
+    $opts = [ordered]@{ Command = 'attach'; Target = $null; Operation = $null; Window = 'here' }
     $positional = [System.Collections.Generic.List[string]]::new()
 
     foreach ($arg in $Arguments) {
         switch ($arg) {
-            '--here' { $opts.Window = 'here' }
-            '--tab'  { $opts.Window = 'tab' }
-            default  {
+            '--new-window' { $opts.Window = 'window' }
+            '--window'     { $opts.Window = 'window' }
+            '--win'        { $opts.Window = 'window' }
+            '--tab'        { $opts.Window = 'tab' }
+            default        {
                 if ($arg -like '--*') { throw "Unknown option: $arg" }
                 $positional.Add($arg)
             }
@@ -121,7 +126,7 @@ function Start-WtSbx {
     else {
         # -w -1 forces a NEW window; without it Windows Terminal may "glom" the
         # invocation into the most-recently-used window as a tab, violating the
-        # "new window by default" contract.
+        # new-window contract of --new-window/--window/--win.
         $wt.Add('-w'); $wt.Add('-1')
     }
     $wt.Add('pwsh'); $wt.Add('-NoExit'); $wt.Add('-EncodedCommand'); $wt.Add($encoded)
@@ -159,7 +164,7 @@ function Invoke-Sbx {
         'scratch' {
             $name    = Get-SbxContainerName -Path $null
             $runArgs = Build-SbxScratchArgs -Name $name
-            $window  = Resolve-SbxWindow -IsMac:$IsMacOS -Requested $o.Window
+            $window  = Resolve-SbxWindow -OnWindows:$IsWindows -Requested $o.Window
             switch ($window) {
                 'here'  { try { & $runtime @runArgs } finally { Remove-SbxScratchLeftovers -Name $name -Runtime $runtime } }
                 'tab'   { Start-WtSbx -RunArgs $runArgs -Name $name -NewTab }
@@ -185,7 +190,7 @@ function Invoke-Sbx {
             }
             else { $session = 'hub'; $workdir = '/work' }
             $attachArgs = Build-SbxAttachArgs -Session $session -WorkDir $workdir
-            $window = Resolve-SbxWindow -IsMac:$IsMacOS -Requested $o.Window
+            $window = Resolve-SbxWindow -OnWindows:$IsWindows -Requested $o.Window
             switch ($window) {
                 'here'  { & $runtime @attachArgs }        # persistent container: no cleanup
                 'tab'   { Start-WtSbx -RunArgs $attachArgs -NewTab }
@@ -300,12 +305,14 @@ function Remove-SbxVolume {
 
 function Resolve-SbxWindow {
     [CmdletBinding()]
-    param([bool]$IsMac = $IsMacOS, [string]$Requested = 'window')
-    if ($IsMac) {
-        if ($Requested -eq 'tab') { throw "sbx: --tab is not supported on macOS (foreground only)" }
-        return 'here'
-    }
-    return $Requested
+    param([bool]$OnWindows = $IsWindows, [string]$Requested = 'here')
+    if ($OnWindows) { return $Requested }
+    # Non-Windows: there is no wt.exe backend, so GUI window/tab spawning is
+    # unsupported — fall back to (or, for an explicit request, reject in favor of)
+    # foreground. `--new-window`/`--window`/`--win` are Windows-only for now.
+    if ($Requested -eq 'window') { throw "sbx: --new-window is not supported on this platform (Windows only, for now)" }
+    if ($Requested -eq 'tab')    { throw "sbx: --tab is not supported on this platform (foreground only)" }
+    return 'here'
 }
 
 function Install-SbxShim {

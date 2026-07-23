@@ -33,7 +33,8 @@ PowerShell uses an in-session function; cmd.exe uses the `sbx.cmd` shim on PATH.
 
 macOS is **foreground-only** (no new-window/tab): every `sbx` invocation runs in the
 current terminal. Run several sessions side by side by opening several terminal/tmux
-panes. `--tab` is rejected on macOS; `--here` is the default (and only) mode there.
+panes. `--new-window`/`--window`/`--win` and `--tab` are rejected on macOS; foreground
+is the default (and only) mode there.
 Developed and verified against **OrbStack**'s `docker` CLI; set `SBX_RUNTIME` to use
 podman/colima/Docker Desktop instead (see `docs/FINDINGS.md` — the volume-ownership
 result that lets us ship an unmodified image was only measured on OrbStack).
@@ -53,7 +54,7 @@ project you've added, instead of a fresh throwaway container per repo.
 | Invocation             | Behavior                                                                                       |
 | ----------------------- | ----------------------------------------------------------------------------------------------- |
 | `sbx add <path>`        | Move the repo into the workspace; leave a junction/symlink at the original path. Live — no restart. |
-| `sbx <name>`            | New WT window (or current terminal on macOS) attached to tmux session `<name>` at `/work/<name>`, running `claude --dangerously-skip-permissions`. Starts `sbx-main` if stopped. |
+| `sbx <name>`            | Current terminal (foreground) attached to tmux session `<name>` at `/work/<name>`, running `claude --dangerously-skip-permissions`. Starts `sbx-main` if stopped. Add `--new-window` for a separate WT window (Windows only). |
 | `sbx`                   | Same, for the `hub` session at `/work` (cross-project orchestration vantage point).             |
 | `sbx ls`                | Workspace projects: name, original host path, whether a tmux session is live.                   |
 | `sbx rm <name>`         | Kill the project's tmux session; move the repo back to its origin; remove the link.              |
@@ -62,12 +63,17 @@ project you've added, instead of a fresh throwaway container per repo.
 | `sbx stop`              | Stop the `sbx-main` container.                                                                    |
 | `sbx status`            | One-glance fleet view: per tmux window, idle time, claude liveness, live status line (stalest first). `SBX_IDLE_WARN=<min>` flags stale sessions. See `docs/sbx-agent-status.md`. |
 | `sbx scratch`           | v1-style: fresh `--rm` container, auth volume only, no workspace.                                |
-| `--here` / `--tab`      | Current terminal / new tab instead of a new window (`--tab` is Windows-only). Only apply to `sbx <name>`/`sbx` (attach) and `sbx scratch` — silently ignored on every other subcommand. |
+| `--new-window` / `--window` / `--win` | Spawn a separate WT **window** instead of running in the current terminal (Windows only — an 'unsupported' error elsewhere). Only apply to `sbx <name>`/`sbx` (attach) and `sbx scratch` — silently ignored on every other subcommand. |
+| `--tab`                 | Spawn a new WT **tab** instead of running in the current terminal (Windows only). Same scope as `--new-window`. |
 
 Retired from v1: `sbx <path>` (per-repo container — run `sbx add <path>` once, then
 `sbx <name>`), `--ssh`, `--name`, per-repo `sbx-proj-*` history volumes, and
 per-container `sbx stop <name>` (there's one container now; `sbx rm <name>` removes a
 project, `sbx stop` stops `sbx-main`).
+
+Also retired: `--here`. Foreground is now the **default** on every platform, so an SSH
+session never needs a flag — use `--new-window` (`--window`/`--win`) on Windows to opt
+into a separate WT window instead.
 
 ### The workspace and the junction-back trick
 

@@ -5,7 +5,7 @@ Describe 'ConvertFrom-SbxArgs (v2)' {
         $o = ConvertFrom-SbxArgs @()
         $o.Command | Should -Be 'attach'
         $o.Target  | Should -BeNullOrEmpty
-        $o.Window  | Should -Be 'window'
+        $o.Window  | Should -Be 'here'
     }
     It 'bare name = attach to that project session' {
         $o = ConvertFrom-SbxArgs @('foo')
@@ -39,10 +39,14 @@ Describe 'ConvertFrom-SbxArgs (v2)' {
         (ConvertFrom-SbxArgs @('scratch')).Command | Should -Be 'scratch'
         (ConvertFrom-SbxArgs @('status')).Command  | Should -Be 'status'
     }
-    It 'parses --here and --tab wherever they appear' {
-        (ConvertFrom-SbxArgs @('--here')).Window          | Should -Be 'here'
-        (ConvertFrom-SbxArgs @('foo', '--tab')).Window    | Should -Be 'tab'
-        (ConvertFrom-SbxArgs @('--here', 'scratch')).Window | Should -Be 'here'
+    It 'parses --new-window / --window / --win and --tab wherever they appear' {
+        (ConvertFrom-SbxArgs @('--new-window')).Window          | Should -Be 'window'
+        (ConvertFrom-SbxArgs @('foo', '--window')).Window       | Should -Be 'window'
+        (ConvertFrom-SbxArgs @('--win', 'scratch')).Window      | Should -Be 'window'
+        (ConvertFrom-SbxArgs @('foo', '--tab')).Window          | Should -Be 'tab'
+    }
+    It 'the retired --here flag is now an unknown option' {
+        { ConvertFrom-SbxArgs @('--here') } | Should -Throw '*Unknown option*'
     }
     It 'errors on missing subcommand arguments' {
         { ConvertFrom-SbxArgs @('add') }          | Should -Throw '*add*'
