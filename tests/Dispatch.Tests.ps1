@@ -26,7 +26,7 @@ Describe 'Invoke-Sbx dispatch (v2)' -Skip:(-not $IsWindows) {
         $script:wt   | Should -Contain '-1'
         $ix = [array]::IndexOf($script:wt, '-EncodedCommand')
         $decoded = [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String($script:wt[$ix + 1]))
-        $decoded | Should -BeLike '*& wslc @a*'
+        $decoded | Should -BeLike "*& 'wslc' @a*"
         $decoded | Should -BeLike "*'exec'*'sbx-main'*"
         $decoded | Should -Not -BeLike '*finally*'      # never reap the persistent container
     }

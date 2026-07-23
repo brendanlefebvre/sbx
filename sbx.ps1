@@ -91,33 +91,50 @@ function Get-SbxContainerName {
     return "sbx-$base-$Suffix"
 }
 
-function Start-WtSbx {
+function Build-SbxWtBody {
     [CmdletBinding()]
-    param([Parameter(Mandatory)][string[]]$RunArgs, [string]$Name, [switch]$NewTab)
-    # Build a pwsh script that SPLATS the run args (`& wslc @a`) instead of
+    param(
+        [Parameter(Mandatory)][string[]]$RunArgs,
+        [string]$Name,
+        [string]$Runtime = (Resolve-SbxRuntime)
+    )
+    # Build a pwsh script that SPLATS the run args (`& <runtime> @a`) instead of
     # re-parsing a flat command string. Passing it via -EncodedCommand means the
     # inner pwsh never re-interprets the tokens, so a path or name containing '$'
     # (a legal Windows dir name), a space, or a quote can't mangle the mount or
     # the cleanup. Each element is emitted as a single-quoted literal.
     $lit    = { "'" + ("$($args[0])" -replace "'", "''") + "'" }
     $argExpr = '@(' + (($RunArgs | ForEach-Object { & $lit $_ }) -join ',') + ')'
+    $rt = & $lit $Runtime
     # Best-effort cleanup: when the container exits (claude quits) or the window
     # is closed, stop+remove it so it doesn't linger in `sbx ls`. wslc keeps the
     # container running when the client disconnects, and a forced window close
     # only gives pwsh a brief window to run `finally`, so this is best-effort —
-    # if it's ever skipped, clean up by hand with `wslc remove <name>` (or the
-    # runtime-appropriate equivalent; see Remove-SbxContainer).
+    # if it's ever skipped, clean up by hand (see Remove-SbxContainer).
     $body = "`$a = $argExpr; "
     if ($Name) {
+        $rm = Get-SbxRemoveVerb $Runtime
         $n  = & $lit $Name
         $np = & $lit "$Name-proj"
         # Volume remove is a no-op for containers without a -proj volume; kept
         # unconditional so windowed scratch cleanup reaps its throwaway
         # projects volume (see Build-SbxScratchArgs / Remove-SbxScratchLeftovers).
-        $body += "try { & wslc @a } finally { & wslc stop $n 2>`$null; & wslc remove $n 2>`$null; & wslc volume remove $np 2>`$null }"
+        $body += "try { & $rt @a } finally { & $rt stop $n 2>`$null; & $rt $rm $n 2>`$null; & $rt volume $rm $np 2>`$null }"
     } else {
-        $body += "& wslc @a"
+        $body += "& $rt @a"
     }
+    return $body
+}
+
+function Start-WtSbx {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string[]]$RunArgs,
+        [string]$Name,
+        [switch]$NewTab,
+        [string]$Runtime = (Resolve-SbxRuntime)
+    )
+    $body = Build-SbxWtBody -RunArgs $RunArgs -Name $Name -Runtime $Runtime
     $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($body))
     $wt = [System.Collections.Generic.List[string]]::new()
     if ($NewTab) {
@@ -167,8 +184,8 @@ function Invoke-Sbx {
             $window  = Resolve-SbxWindow -OnWindows:$IsWindows -Requested $o.Window
             switch ($window) {
                 'here'  { try { & $runtime @runArgs } finally { Remove-SbxScratchLeftovers -Name $name -Runtime $runtime } }
-                'tab'   { Start-WtSbx -RunArgs $runArgs -Name $name -NewTab }
-                default { Start-WtSbx -RunArgs $runArgs -Name $name }
+                'tab'   { Start-WtSbx -RunArgs $runArgs -Name $name -Runtime $runtime -NewTab }
+                default { Start-WtSbx -RunArgs $runArgs -Name $name -Runtime $runtime }
             }
             return
         }
@@ -193,8 +210,8 @@ function Invoke-Sbx {
             $window = Resolve-SbxWindow -OnWindows:$IsWindows -Requested $o.Window
             switch ($window) {
                 'here'  { & $runtime @attachArgs }        # persistent container: no cleanup
-                'tab'   { Start-WtSbx -RunArgs $attachArgs -NewTab }
-                default { Start-WtSbx -RunArgs $attachArgs }
+                'tab'   { Start-WtSbx -RunArgs $attachArgs -Runtime $runtime -NewTab }
+                default { Start-WtSbx -RunArgs $attachArgs -Runtime $runtime }
             }
             return
         }

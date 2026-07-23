@@ -13,9 +13,9 @@ for the implementation plan.
   runtime is **OrbStack** (its `docker` CLI); see `docs/FINDINGS.md` for what that
   scopes — notably the volume-ownership result that lets us ship an unmodified image.
 - The container runtime is `wslc` on Windows / `docker` on macOS, overridable via
-  `SBX_RUNTIME` (e.g. podman/colima/orbstack). On macOS the override is always honored;
-  on Windows only the default foreground mode honors it — the `--new-window`/`--tab`
-  spawn modes hardcode `wslc`.
+  `SBX_RUNTIME` (e.g. podman/colima/orbstack). The override is honored everywhere,
+  including the Windows `--new-window`/`--tab` spawn modes (the runtime and its
+  remove verb are baked into the spawned window's command by `Build-SbxWtBody`).
 - Launcher lives in `sbx.ps1`; `$PROFILE` dot-sources it (see README / Task 10).
 
 ## Test
