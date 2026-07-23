@@ -67,6 +67,13 @@ Candidates named so far: OpenCode, Pi. (Codex CLI / others: same shape, add
 when wanted.)
 
 ## Deferred minors (from final-review triage — fix opportunistically)
+- Pre-configure the image with a git user name/email so agent commits from
+  inside the sandbox don't fail with "Author identity unknown" (hit in
+  practice: a commit from within sbx aborted until `user.name`/`user.email`
+  were set repo-locally by hand). Decide where the identity comes from —
+  a baked default vs. injecting the host's `git config user.*` at container
+  create/attach time (latter avoids a wrong-author footgun and dovetails with
+  the "agents commit, human pushes" gate in item 1).
 - `Get-SbxVolumeRoot` OrdinalIgnoreCase prefix match (case-sensitive-APFS nit).
 - `Add-SbxProject` creates the workspace dir before the cross-volume check.
 - `Invoke-SbxSync` allowlist is case-insensitive (`-cnotin` if touched).
