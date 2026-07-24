@@ -483,3 +483,152 @@ of ~10 prior mounts from probes/rebuilds that session — all succeeded with no
 volume-mount ceiling" above) is gone in 2.9.4.0, matching the error message's
 "will be fixed in a future release" promise. The WSL-service-restart
 workaround is no longer needed; the earlier section is retained as history.
+
+## P7 — c-heavy sync: container→host sshd callback is viable (Windows + macOS)
+
+Probed 2026-07-23 on Windows (wslc **2.9.4.0**, Win32-OpenSSH) AND macOS
+(OrbStack, Remote Login), via `probes/probe-host.ps1` (see
+`docs/probes/c-heavy-sync-probes.md`). The Windows half rests on wslc-specific
+transport behavior — the bridge gateway, the absent `host.docker.internal` — so
+the version matters here more than most: re-measure it after a preview bump
+rather than assuming this section still holds.
+**Verdict: GO on both** — the SSH forced-command callback works end to end and
+the security invariants hold. Windows details below; macOS notes further down.
+
+Full matrix passed: reachability; dedicated key accepted + forced command
+fired; `push`/`pull`/`fetch` each ran host-side git (`Everything up-to-date`
+/ `Already up to date.` / `sbx-sync-exec: OK`); and every validator negative was
+refused — `clone` (verb), `push --force` (extra token), `../secret` (traversal),
+`ghost` (not in workspace), `; sh` (extra token).
+
+**Correction (2026-07-24), forwarding.** The original run also recorded "`-L`/`-D`
+forwarding killed by `restrict`", and that evidence does not hold: the harness
+wrote `-L …` *inside* the quoted remote command, where ssh never parsed it as an
+option, and then asserted the absence of a string that only appears under `-v`.
+The check could not fail. Two things follow. First, a bare `-L` is not refusable
+at request time anyway — a local forward is a client-side listener until traffic
+flows through it, so `-R` (which needs a server-side `tcpip-forward` request) is
+the testable direction. Second, the underlying property is almost certainly
+intact: `restrict` implies `no-port-forwarding`, which OpenSSH applies to both
+directions. The harness now tests it with `-R` and asserts the refusal; treat
+forwarding as **argued from `restrict` semantics, re-measured on the next probe
+run** rather than as measured on 2026-07-23. Everything else in P7 stands.
+
+**Reachability.** The container reached host sshd over the host's **Tailscale**
+address (`100.x`); an earlier run also reached it via the **WSL vEthernet
+gateway** `172.20.240.1` (got to publickey auth). Refused/timed-out: the wslc
+bridge gateway `172.17.0.1`, the LAN IP `192.168.1.x` (refused — sshd not
+answering the container on the LAN adapter, a *good* sign for isolation), the
+router, and `host.docker.internal` (wslc does not inject it). **Auto-discovery
+of the host address is unreliable** — `/proc/net/route` yields the wslc bridge
+gw, not the host — so the build should let the user pin the address (the WSL
+gateway is the clean host-only path; prefer it over Tailscale).
+
+**Key placement.** The host account is a local Administrator, but
+`C:\ProgramData\ssh\administrators_authorized_keys` does **not exist** and
+sshd reads the per-user `~/.ssh/authorized_keys` (the existing ECDSA key there
+authenticates). So the `administrators_authorized_keys` quirk did not bite
+here — but note the auto-detector would target that (nonexistent) file for an
+admin account, so the per-user file had to be pinned with `-AuthorizedKeysFile`.
+Do NOT "fix" this by creating `administrators_authorized_keys`: once it exists
+it takes precedence for admins and can lock out normal logins.
+
+**macOS (OrbStack) — also GO (2026-07-23).** Same harness (`probe-host.ps1` is
+cross-platform), same full-matrix pass. macOS-specific notes for the build:
+- Reachability is via **`host.docker.internal`** (OrbStack provides it, unlike
+  wslc). The OrbStack bridge gateway `192.168.215.1` (the mac host) *refused*
+  port 22 from the container — sshd wasn't answering on that interface — so
+  `host.docker.internal` is the path to use. Local Network permission (P6) must
+  be granted or every attempt silently times out.
+- The forced command must invoke pwsh via the **Homebrew env wrapper**
+  `/opt/homebrew/bin/pwsh`, NOT the resolved Cellar apphost
+  (`/opt/homebrew/Cellar/.../libexec/pwsh`), which fails "missing runtime" in
+  sshd's minimal environment. (Get-Command resolves through the wrapper, so the
+  probe pins the unresolved bin path.)
+- Per-user `~/.ssh/authorized_keys` is read directly — no admin-file quirk.
+
+**Two harness bugs found the hard way (both fixed; relevant to the build):**
+1. **authorized_keys newline merge.** Appending our entry to a file whose last
+   line had no trailing newline MERGED it onto the prior key — the old key
+   stayed valid (longer comment), ours vanished → `Permission denied
+   (publickey)` with no obvious cause. Any code that appends to authorized_keys
+   must ensure a separating newline first.
+2. **Teardown data loss.** The first harness version rewrote authorized_keys by
+   line-filtering, which blanked a user's real key. Fixed to snapshot the exact
+   bytes (+ a `.bak` sidecar) before writing and restore verbatim. Never
+   line-edit a file that may hold real keys.
+
+**LAN exposure (probe #4) — resolved with nuance, not a blocker.** Checked
+2026-07-23: the Windows host's sshd IS reachable from a second LAN device (the
+Mac) at its `192.168` address. That is fine *for this deployment*, because the
+host already runs sshd for the owner's own use — c-heavy does not introduce the
+listening server or its LAN exposure, it rides on the existing one. The
+roadmap's "firewall sshd away from the LAN" concern applies to the different
+case where sshd is stood up *solely* for the callback. What matters is that
+c-heavy does not WIDEN exposure: the dedicated key is `restrict,command=`-pinned,
+so reaching the port with that key yields only the three git verbs on workspace
+repos — no shell, no forwarding — regardless of who can reach it. So probe #4's
+real question is "does c-heavy widen exposure beyond the existing sshd?" →
+**no**, not "is sshd unreachable from the LAN" (which contradicts the owner
+already using it). Separate, pre-existing hygiene item (independent of c-heavy):
+a `Failed password` line in the log suggests `PasswordAuthentication` may be on;
+a LAN-reachable sshd should prefer key-only auth.
+
+## P8 — c-heavy build: the SSH allowlist is not the whole boundary; host-side git is
+
+Found 2026-07-24 while building c-heavy (ROADMAP item 1). P7 probed the *SSH*
+surface and it held. What P7 never exercised is what happens **after** the
+validator says OK: `git -C <workspace repo> <verb>` runs on the host, inside a
+repository the agent can write. git is not a passive file format — it executes
+programs named by `.git/hooks/*` and by a long tail of config keys.
+
+Demonstrated on this repo's own rig, all three before mitigation:
+
+1. **Hooks = host RCE.** An agent-written `.git/hooks/pre-push` ran host-side as
+   the host user on `sbx sync push`. No config key involved — `.git/hooks/` is
+   the default path. This is the big one.
+2. **Config = host RCE.** A repo-local `core.sshCommand` ran on fetch. The same
+   shape exists for `credential.helper`, `filter.*.clean`, `merge.*.driver`,
+   `remote.*.receivepack`, `diff.*.textconv`, `sequence.editor`, `gpg.program`, …
+3. **Symlink escape.** The old direct-child guard used `(Get-Item $dir).Parent`,
+   which for a *symlink* in the workspace is the workspace — so a link planted by
+   the container (which has the workspace mounted read-write) passed the check and
+   aimed host git at any directory on the host.
+
+**This was never c-heavy-only.** (1) and (2) apply to shipped c-lite as well: an
+agent plants the hook and waits for the human to run `sbx sync` themselves.
+c-heavy changes it from "agent can set a trap" to "agent springs it on demand".
+
+Fixed:
+- `Get-SbxGitHardeningArgs` — command-line `-c` pins on every sync:
+  `core.hooksPath` → an empty host-side dir, plus `core.fsmonitor`,
+  `protocol.ext.allow`, `protocol.file.allow`, `core.sshCommand`, `gpg.program`,
+  `core.editor`, `core.askPass`, and a reset of the multi-valued
+  `credential.helper` list — plus `--no-pager`, which is the pager's pin: `cat`
+  doesn't exist on Windows, so `-c core.pager=cat` isn't portable.
+  **Raceless** — command-line config outranks every
+  file and the container can't edit our argv. Where the host legitimately sets one
+  of these, the value is read from global/system scope and re-pinned, so hardening
+  costs the user nothing.
+- `Get-SbxUnsafeGitConfig` — refuses a repo whose local/worktree config sets an
+  exec key whose name can't be pinned in advance (arbitrary middle segment).
+  **Advisory only**: the container can rewrite `.git/config` between our read and
+  git's. Recorded as a speed bump, not a boundary.
+- `Resolve-SbxSyncRequest` now rejects any workspace entry that is a link. `sbx
+  add` only ever creates real directories in the workspace (the link it leaves
+  points the other way, at the origin), so nothing legitimate is refused.
+
+Verified after the fix: the pre-push hook stays on disk and executable, the push
+succeeds, and the hook does not fire.
+
+**Residual, documented in `docs/SYNC.md` rather than papered over:** the denylist
+is racy and a denylist can miss a key; and `push` sends wherever
+`remote.origin.url` points, which the agent also controls — so c-heavy means an
+agent can push repo contents to a remote of its choosing. That last one is
+inherent to autonomous sync, not a transport bug: it *is* the review gate the
+feature deliberately gives up.
+
+**Method note worth keeping:** the probe pass asked "is the transport viable?"
+and answered it well. It did not ask "what does the thing at the far end of the
+transport execute?" When probing a hole shaped like a command allowlist, probe
+the *program the allowlist calls*, not just the allowlist.

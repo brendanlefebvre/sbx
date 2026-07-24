@@ -21,6 +21,9 @@ for the implementation plan.
 ## Test
 - Unit (pure builder fns):  `pwsh -NoProfile -Command "Invoke-Pester tests -Output Detailed"`
 - Integration (live container):  run `verify/CHECKLIST.md` by hand on this machine.
+- After any `sbx.ps1` change or merge, open host terminals still hold the old dot-sourced
+  functions — start live testing from a fresh terminal or re-dot-source `sbx.ps1` first,
+  or you'll debug phantom failures.
 
 ## Conventions
 - Git: feature branches `feat/<slug>`, granular commits, merge to `main` with `--no-ff`; push `main` to the `origin` sync remote. No PRs.
@@ -45,5 +48,17 @@ for the implementation plan.
   (`/work/<name>`) under Claude's own `~/.claude/projects` layout. Orphaned `sbx-proj-*`
   volumes from the v1 per-repo model are retired; reap them by hand
   (`wslc volume remove <name>`) and don't recreate the pattern.
+- **Sync has two rungs.** *c-lite* (default): the human runs `sbx sync <name> <op>`
+  host-side, no keys in the container. *c-heavy* (opt-in, `sbx sync-setup`): a
+  dedicated container key pinned `restrict,command="…sbx-sync-exec.ps1…"` lets agents
+  trigger the same three verbs themselves. Both go through ONE validator
+  (`Resolve-SbxSyncRequest`) — never add a second allowlist. Read `docs/SYNC.md`
+  ("Security model, and its limits") and `docs/FINDINGS.md` P8 before touching
+  either: host-side git runs in an
+  agent-writable repo and executes hooks and config-named programs, so
+  `Get-SbxGitHardeningArgs` (raceless `-c` pins) is load-bearing security, not
+  tidiness. Adding a verb, or dropping a pin, widens a boundary.
+- Changing the in-container `sbx sync` client means changing the image
+  (`Sandboxfile`) — rebuild the image and `sbx rebuild`, or you'll test the old one.
 
 Now say: "I've reviewed the project memory."
